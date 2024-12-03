@@ -1,0 +1,469 @@
+// Recipe used in Laso-Jadart et al. 2024 
+// Reproduce REC-DIV model in SLim and introduce sex-biased migrations
+// Model : a panmictic population evolves until a fragmentation into four populations
+// set up a simple neutral nonWF simulation
+
+initialize() {
+	initializeSLiMModelType("nonWF");
+	        
+		//For the next populations :
+        //N corresponds to half the population size to seed the population :
+        //K corresponds to the true size estimated by fastsimcoal REC-DIV 
+		//To change the size of a population in a non-WF model, you need to i) seed a new population, ii) kill the first population
+        defineConstant("N_ANC", 7907);
+
+        defineConstant("N_ANC1", 2656);
+        defineConstant("N_ANC2", 4015);
+        defineConstant("N_ANC3", 3612);
+        defineConstant("N_NAO", 524);
+        defineConstant("N_WIO", 1002);
+        defineConstant("N_SPO", 790);
+        defineConstant("N_NPO", 655);
+
+        defineConstant("K_ANC1", N_ANC1*2);
+        defineConstant("K_ANC2", N_ANC2*2);
+        defineConstant("K_ANC3", N_ANC3*2);
+        defineConstant("K_NAO", N_NAO*2);
+        defineConstant("K_WIO", N_WIO*2);
+        defineConstant("K_SPO", N_SPO*2);
+        defineConstant("K_NPO", N_NPO*2);
+		
+		//For the time of events :
+        //We used the times estimated in REC-DIV in generations and scaled them for 100,000 ticks (or generations)
+		defineConstant("T_NANC1", 27228); //Population size change of the panmictic ancestral population
+		defineConstant("T_NANC2", 66502); //Population size change of the panmictic ancestral population
+		defineConstant("T_NANC3", 92459); //Population size change of the panmictic ancestral population
+		defineConstant("T_DIV", 99359);	//Time of divergence between the four populations
+		defineConstant("T_END", 100001); //Present time
+	
+	//Migration rates (only males for now)
+	defineConstant("mig_IP", 0.01013); //WIO-SPO migration
+	defineConstant("mig", 0.00073); //south-north migration
+	
+	//neutral mutations, which are allowed to fix : nuclear
+	initializeMutationType("m1", 0.5, "f", 0.0);
+	m1.convertToSubstitution = T;
+	m1.color = 'red';
+	
+    //neutral mutations, which are allowed to fix : mito
+	initializeMutationType("m2", 0.5, "f", 0.0);
+	m2.convertToSubstitution = T;
+	m2.color = 'green';
+	
+    //neutral mutations, which are allowed to fix : Y
+	initializeMutationType("m3", 0.5, "f", 0.0);
+	m3.convertToSubstitution = T;
+	m3.color = 'yellow';	
+	
+	//m5 mutation - Mitochondrial Marker Mutation Used for Transmission
+	initializeMutationType('m4',0.5,'f',0.0);
+	m5.convertToSubstitution = F;
+	m5.color = 'blue'; 
+	
+	//m6 mutation - Ychr Marker Mutation Used for Transmission
+	initializeMutationType('m5',0.5,'f',0.0);
+	m6.convertToSubstitution = F;
+ 	m6.color = 'blue';	
+	
+	//Set two sexes here
+	initializeSex("A");
+	//Set the sizes of each genomic element
+
+	defineConstant("L_MITO", 16744); //Size of C. carcharias mitochondrial
+	defineConstant("L_NUC", 10000000);	//A 10Mb autosome
+	defineConstant("L_Y", 3000000);	//Approximate size of the male-specific Y chromosome
+	
+	//Then define the mutation and recombination rates, and the ends of each element
+	rates = c(1e-8,0,0);
+	mu_rates = c(1.93e-8,5e-7,1.93e-8);	
+	ends = c(L_NUC-1,L_NUC+L_MITO-1,L_NUC+L_MITO+L_Y-1);
+	
+	initializeRecombinationRate(rates,ends);
+	initializeMutationRate(mu_rates,ends);
+	initializeGenomicElementType("g1", m1, 1.0);
+    initializeGenomicElementType("g2", m2, 1.0);
+    initializeGenomicElementType("g3", m3, 1.0);
+	initializeGenomicElement(g1, 0, L_NUC-1);
+    initializeGenomicElement(g2, L_NUC, L_MITO+L_NUC-1);
+    initializeGenomicElement(g3, L_NUC+L_MITO,L_MITO+L_NUC+L_Y-1);
+	 
+}
+
+// each individual reproduces itself once
+reproduction() {
+subpop.addCrossed(subpop.sampleIndividuals(1, sex="F"), subpop.sampleIndividuals(1, sex="M"));
+}
+
+1 early() {
+//Create the first population
+//Add marker mutations on mtDNA/Ychr
+sim.addSubpop("p1", 10).setValue("K",N_ANC);
+inds = sim.subpopulations.individuals;
+mito = inds.genomes[seqAlong(inds) * 2];
+mito.addNewDrawnMutation(m4, L_NUC+1);
+
+males_list = inds[inds.sex=='M'];
+Y = males_list.genomes[seqAlong(males_list)*2+1];
+Y.addNewDrawnMutation(m5,L_NUC+L_MITO+1);
+
+//Keep track of the ticks
+log_cycle = community.createLogFile("time_log.txt", logInterval=1000);
+log_cycle.addCycle();
+
+}
+
+early() {
+
+// pre-migration density-dependent fitness for each subpop
+// Allows the populations to randomly vary in size
+for (subpop in sim.subpopulations) {
+KPOP = subpop.getValue("K");
+subpop.fitnessScaling = KPOP / subpop.individualCount;
+	}
+}
+
+T_NANC1-1 late() {
+sim.addSubpop("p2", 0).setValue("K",K_ANC1);
+}
+
+T_NANC1 reproduction() {
+// generate juveniles to seed p2 (same as p1 : variation of ancestral Ne)
+    p1_all_inds = p1.individuals;
+	p1_breeder_females = p1_all_inds[p1_all_inds.sex=='F'];
+	p1_breeder_males = p1_all_inds[p1_all_inds.sex=='M'];
+   
+for (i in seqLen(N_ANC1))
+{
+		p1_firstParent = sample(p1_breeder_females,1);
+		p1_secondParent = sample(p1_breeder_males,1);
+		
+		while (isNULL(p2.addCrossed(p1_firstParent, p1_secondParent)))
+		{
+			p1_firstParent = sample(p1_breeder_females,1);
+			p1_secondParent = sample(p1_breeder_males,1);				
+		}
+		
+		 p2.addCrossed(p1_firstParent, p1_secondParent);	
+		}
+// we're done, don't run again this tick
+self.active = 0;
+}
+
+T_NANC1 early() {
+//Kill the "first" ancestral population
+c(p1).fitnessScaling = 0.0;
+}
+
+
+66501 late() {
+sim.addSubpop("p3", 0).setValue("K",K_ANC2);
+}
+
+66502 reproduction() {
+// generate juveniles to seed p3 (same as p1 and p2 : variation of ancestral Ne)
+    p2_all_inds = p2.individuals;
+	p2_breeder_females = p2_all_inds[p2_all_inds.sex=='F'];
+	p2_breeder_males = p2_all_inds[p2_all_inds.sex=='M'];
+   
+for (i in seqLen(N_ANC2))
+{
+		p2_firstParent = sample(p2_breeder_females,1);
+		p2_secondParent = sample(p2_breeder_males,1);
+		
+		while (isNULL(p3.addCrossed(p2_firstParent, p2_secondParent)))
+		{
+			p2_firstParent = sample(p2_breeder_females,1);
+			p2_secondParent = sample(p2_breeder_males,1);				
+		}
+		
+		 p3.addCrossed(p2_firstParent, p2_secondParent);	
+		}
+// we're done, don't run again this tick
+self.active = 0;
+}
+
+66502 early() {
+c(p2).fitnessScaling = 0.0;
+}
+
+92458 late() {
+sim.addSubpop("p4", 0).setValue("K",K_ANC3);
+}
+
+92459 reproduction() {
+// generate juveniles to seed p4 (same as p1, p2 and p3 : variation of ancestral Ne)
+    p3_all_inds = p3.individuals;
+	p3_breeder_females = p3_all_inds[p3_all_inds.sex=='F'];
+	p3_breeder_males = p3_all_inds[p3_all_inds.sex=='M'];
+   
+for (i in seqLen(N_ANC3))
+{
+		p3_firstParent = sample(p3_breeder_females,1);
+		p3_secondParent = sample(p3_breeder_males,1);
+		
+		while (isNULL(p4.addCrossed(p3_firstParent,p3_secondParent)))
+		{
+			p3_firstParent = sample(p3_breeder_females,1);
+			p3_secondParent = sample(p3_breeder_males,1);				
+		}
+		
+		 p4.addCrossed(p3_firstParent, p3_secondParent);	
+		}
+// we're done, don't run again this tick
+self.active = 0;
+}
+
+92459 early() {
+c(p3).fitnessScaling = 0.0;
+}
+
+
+// Now we modelize the split of p4 into NAO/WIO/SPO/NPO or p5/p6/p7/p8
+//First : create the four populations to fill 
+99358 late() {
+sim.addSubpop("p5", 0).setValue("K",K_NAO);
+sim.addSubpop("p6", 0).setValue("K",K_WIO);
+sim.addSubpop("p7", 0).setValue("K",K_SPO);
+sim.addSubpop("p8", 0).setValue("K",K_NPO);
+}
+
+99359 reproduction() {
+// generate juveniles from the ancestral pop (p4) 
+    p4_all_inds = p4.individuals;
+	p4_breeder_females = p4_all_inds[p4_all_inds.sex=='F'];
+	p4_breeder_males = p4_all_inds[p4_all_inds.sex=='M'];
+   
+   
+//Seed NAO (p5)   
+for (i in seqLen(N_NAO))
+{
+		p4_firstParent = sample(p4_breeder_females,1);
+		p4_secondParent = sample(p4_breeder_males,1);
+		
+		while (isNULL(p5.addCrossed(p4_firstParent,p4_secondParent)))
+		{
+			p4_firstParent = sample(p4_breeder_females,1);
+			p4_secondParent = sample(p4_breeder_males,1);				
+		}
+		
+		 p5.addCrossed(p4_firstParent, p4_secondParent);	
+		}
+		
+//Seed WIO (p6)   		
+for (i in seqLen(N_WIO))
+{
+		p4_firstParent = sample(p4_breeder_females,1);
+		p4_secondParent = sample(p4_breeder_males,1);
+		
+		while (isNULL(p6.addCrossed(p4_firstParent,p4_secondParent)))
+		{
+			p4_firstParent = sample(p4_breeder_females,1);
+			p4_secondParent = sample(p4_breeder_males,1);				
+		}
+		
+		 p6.addCrossed(p4_firstParent, p4_secondParent);	
+		}		
+
+//Seed SPO (p7) 		
+for (i in seqLen(N_SPO))
+{
+		p4_firstParent = sample(p4_breeder_females,1);
+		p4_secondParent = sample(p4_breeder_males,1);
+		
+		while (isNULL(p7.addCrossed(p4_firstParent,p4_secondParent)))
+		{
+			p4_firstParent = sample(p4_breeder_females,1);
+			p4_secondParent = sample(p4_breeder_males,1);				
+		}
+		
+		 p7.addCrossed(p4_firstParent, p4_secondParent);	
+		}
+
+//Seed NPO (p8) 		
+for (i in seqLen(N_NPO))
+{
+		p4_firstParent = sample(p4_breeder_females,1);
+		p4_secondParent = sample(p4_breeder_males,1);
+		
+		while (isNULL(p8.addCrossed(p4_firstParent,p4_secondParent)))
+		{
+			p4_firstParent = sample(p4_breeder_females,1);
+			p4_secondParent = sample(p4_breeder_males,1);				
+		}
+		
+		 p8.addCrossed(p4_firstParent, p4_secondParent);	
+		}				
+		
+// we're done, don't run again this tick
+self.active = 0;
+}
+
+
+99359 early() {
+c(p4).fitnessScaling = 0.0;
+}
+
+modifyChild()
+{
+	// Each offspring needs to inherit a mitochondrial genome from its
+	// female parent, and not inherit one from the male parent.  Note that
+	// childGenome1 comes from the first (female parent) and child.genome2 from the second (male parent).  
+	
+	    if (!child.genome1.containsMarkerMutation(m5, L_NUC+1))
+                return F;
+        if (!child.genome2.containsMarkerMutation(m6, L_NUC+L_MITO+1))
+                return F;
+
+
+	// We enforce haploidy in the mitochondrial/Ychr genome here, by removing all
+	// mutations from the null genome. This prevents any confusion during
+	// during calculations. This is one reason we use different
+	// mutation types for neutral mutations in the two genome elements.
+	child.genome2.removeMutations(child.genome2.mutationsOfType(m2));
+	child.genome2.removeMutations(child.genome2.mutationsOfType(m5));
+  	child.genome1.removeMutations(child.genome1.mutationsOfType(m3));
+  	child.genome1.removeMutations(child.genome1.mutationsOfType(m6));
+
+	return T;	
+}
+
+
+99360: early() {
+// We are setting asymmetric migration rates between the populations
+	
+    // First step : take the whole pool of male/female childs for each pop
+    newborns_p5 = p5.individuals[p5.individuals.age == 0];
+    females_p5 = newborns_p5[newborns_p5.sex == "F"];
+    males_p5 = newborns_p5[newborns_p5.sex == "M"];
+    
+    newborns_p6 = p6.individuals[p6.individuals.age == 0];
+    females_p6 = newborns_p6[newborns_p6.sex == "F"];
+    males_p6 = newborns_p6[newborns_p6.sex == "M"];
+    
+    newborns_p7 = p7.individuals[p7.individuals.age == 0];
+    females_p7 = newborns_p7[newborns_p7.sex == "F"];
+    males_p7 = newborns_p7[newborns_p7.sex == "M"];
+    
+    newborns_p8 = p8.individuals[p8.individuals.age == 0];
+    females_p8 = newborns_p8[newborns_p8.sex == "F"];
+    males_p8 = newborns_p8[newborns_p8.sex == "M"];
+        
+    //Second step : send each new individual in another pop depending on the migration rates
+	//Each child can migrate according to a uniform distribution between 0 and 1
+	//No philopatry : newborns_pX
+	//Male philopatry : females_pX
+	//Female philopatry : males_pX
+	
+    // Male migration NAO -> WIO
+    for (ind in newborns_p5){
+        if (runif(1) <= mig)
+            p6.takeMigrants(ind);
+              }
+   // Male migration WIO -> NAO/SPO
+    for (ind in newborns_p6){
+		ntemp_wio = runif(1);
+        if (ntemp_wio <= mig)
+            p5.takeMigrants(ind); 
+             
+
+        if (ntemp_wio >= 1-mig_IP)
+            p7.takeMigrants(ind);  
+           }       
+    
+     // Male migration SPO -> NPO/WIO
+    for (ind in newborns_p7){
+	    ntemp_spo = runif(1);
+        if (ntemp_spo <= mig)
+            p8.takeMigrants(ind); 
+             
+
+        if (ntemp_spo >= 1-mig_IP)
+            p6.takeMigrants(ind); 
+            } 
+
+    // Male migration NPO -> SPO
+    for (ind in newborns_p8){
+        if (runif(1) <= mig)
+            p7.takeMigrants(ind);  
+    }         
+}
+
+// output all fixed mutations at end
+// for different time points : present time (100001), +1000 , +2000 or +5000 generations
+
+100001 late() { 
+//Sample and output 50 individuals per pop
+allind = c(sample(p5.individuals,50,F),sample(p6.individuals,50,F),sample(p7.individuals,50,F),sample(p8.individuals,50,F));
+allind.genomes.outputVCF(filePath="ALL.vcf",outputMultiallelics=F);
+
+//Sample and output the same number of individuals as for the mtDNA dataset
+allind_mito = c(sample(p5.individuals,58,F),sample(p6.individuals,58,F),sample(p7.individuals,48,F),sample(p8.individuals,120,F));
+allind_mito.genomes.outputVCF(filePath="MITO_sampling.vcf",outputMultiallelics=F);
+
+//Output 50 males per pop
+allmales_Y = c(sample(p5.individuals[p5.individuals.sex == "M"],50,F),sample(p6.individuals[p6.individuals.sex == "M"],50,F),sample(p7.individuals[p7.individuals.sex == "M"],50,F),sample(p8.individuals[p8.individuals.sex == "M"],50,F));
+allmales_Y.genomes.outputVCF(filePath="YCHR_sampling.vcf",outputMultiallelics=F);
+
+//Output the same number of males per pop as the real dataset
+allmales_Y = c(sample(p5.individuals[p5.individuals.sex == "M"],2,F),sample(p6.individuals[p6.individuals.sex == "M"],4,F),sample(p7.individuals[p7.individuals.sex == "M"],4,F),sample(p8.individuals[p8.individuals.sex == "M"],2,F));
+allmales_Y.genomes.outputVCF(filePath="YCHR_real_sampling.vcf",outputMultiallelics=F);
+
+
+}
+
+101001 late() {
+//Sample and output 50 individuals per pop
+allind = c(sample(p5.individuals,50,F),sample(p6.individuals,50,F),sample(p7.individuals,50,F),sample(p8.individuals,50,F));
+allind.genomes.outputVCF(filePath="ALL_1000g.vcf",outputMultiallelics=F);
+
+//Sample and output the same nulber of individuals as for the mtDNA dataset
+allind_mito = c(sample(p5.individuals,58,F),sample(p6.individuals,58,F),sample(p7.individuals,48,F),sample(p8.individuals,120,F));
+allind_mito.genomes.outputVCF(filePath="MITO_sampling_1000g.vcf",outputMultiallelics=F);
+
+//Output 50 males per pop
+allmales_Y = c(sample(p5.individuals[p5.individuals.sex == "M"],50,F),sample(p6.individuals[p6.individuals.sex == "M"],50,F),sample(p7.individuals[p7.individuals.sex == "M"],50,F),sample(p8.individuals[p8.individuals.sex == "M"],50,F));
+allmales_Y.genomes.outputVCF(filePath="YCHR_sampling_1000g.vcf",outputMultiallelics=F);
+
+//Output the same number of males per pop as the real dataset
+allmales_Y = c(sample(p5.individuals[p5.individuals.sex == "M"],2,F),sample(p6.individuals[p6.individuals.sex == "M"],4,F),sample(p7.individuals[p7.individuals.sex == "M"],4,F),sample(p8.individuals[p8.individuals.sex == "M"],2,F));
+allmales_Y.genomes.outputVCF(filePath="YCHR_real_sampling_1000g.vcf",outputMultiallelics=F);
+
+}
+
+102001 late() {
+//Sample and output 50 individuals per pop
+allind = c(sample(p5.individuals,50,F),sample(p6.individuals,50,F),sample(p7.individuals,50,F),sample(p8.individuals,50,F));
+allind.genomes.outputVCF(filePath="ALL_2000g.vcf",outputMultiallelics=F);
+
+//Sample and output the same number of individuals as for the mtDNA dataset
+allind_mito = c(sample(p5.individuals,58,F),sample(p6.individuals,58,F),sample(p7.individuals,48,F),sample(p8.individuals,120,F));
+allind_mito.genomes.outputVCF(filePath="MITO_sampling_2000g.vcf",outputMultiallelics=F);
+
+//Output 50 males per pop
+allmales_Y = c(sample(p5.individuals[p5.individuals.sex == "M"],50,F),sample(p6.individuals[p6.individuals.sex == "M"],50,F),sample(p7.individuals[p7.individuals.sex == "M"],50,F),sample(p8.individuals[p8.individuals.sex == "M"],50,F));
+allmales_Y.genomes.outputVCF(filePath="YCHR_sampling_2000g.vcf",outputMultiallelics=F);
+
+//Output the same number of males per pop as the real dataset
+allmales_Y = c(sample(p5.individuals[p5.individuals.sex == "M"],2,F),sample(p6.individuals[p6.individuals.sex == "M"],4,F),sample(p7.individuals[p7.individuals.sex == "M"],4,F),sample(p8.individuals[p8.individuals.sex == "M"],2,F));
+allmales_Y.genomes.outputVCF(filePath="YCHR_real_sampling_2000g.vcf",outputMultiallelics=F);
+
+}
+
+105001 late() {
+//Sample and output 50 individuals per pop
+allind = c(sample(p5.individuals,50,F),sample(p6.individuals,50,F),sample(p7.individuals,50,F),sample(p8.individuals,50,F));
+allind.genomes.outputVCF(filePath="ALL_5000g.vcf",outputMultiallelics=F);
+
+//Sample and output the same number of individuals as for the mtDNA dataset
+allind_mito = c(sample(p5.individuals,58,F),sample(p6.individuals,58,F),sample(p7.individuals,48,F),sample(p8.individuals,120,F));
+allind_mito.genomes.outputVCF(filePath="MITO_sampling_5000g.vcf",outputMultiallelics=F);
+
+//Output 50 males per pop
+allmales_Y = c(sample(p5.individuals[p5.individuals.sex == "M"],50,F),sample(p6.individuals[p6.individuals.sex == "M"],50,F),sample(p7.individuals[p7.individuals.sex == "M"],50,F),sample(p8.individuals[p8.individuals.sex == "M"],50,F));
+allmales_Y.genomes.outputVCF(filePath="YCHR_sampling_5000g.vcf",outputMultiallelics=F);
+
+//Output the same number of males per pop as the real dataset
+allmales_Y = c(sample(p5.individuals[p5.individuals.sex == "M"],2,F),sample(p6.individuals[p6.individuals.sex == "M"],4,F),sample(p7.individuals[p7.individuals.sex == "M"],4,F),sample(p8.individuals[p8.individuals.sex == "M"],2,F));
+allmales_Y.genomes.outputVCF(filePath="YCHR_real_sampling_5000g.vcf",outputMultiallelics=F);
+
+}
